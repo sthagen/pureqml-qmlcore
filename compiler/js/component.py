@@ -1,5 +1,6 @@
 from builtins import filter, object, range, str
 from past.builtins import basestring
+from collections import OrderedDict
 
 from compiler.js import get_package, split_name, escape, mangle_package
 from compiler.js.code import process, parse_deps, generate_accessors, replace_enums, path_or_parent, mangle_path
@@ -9,24 +10,25 @@ from functools import partial
 import re
 
 class component_generator(object):
-	def __init__(self, ns, name, component, prototype = False):
+	def __init__(self, ns, parent, name, component, prototype = False):
 		self.ns = ns
 		self.name = name
+		self.parent = parent
 		self.component = component
-		self.aliases = {}
-		self.declared_properties = {}
-		self.lazy_properties = {}
-		self.const_properties = {}
+		self.aliases = OrderedDict()
+		self.declared_properties = OrderedDict()
+		self.lazy_properties = OrderedDict()
+		self.const_properties = OrderedDict()
 		self.properties = []
-		self.enums = {}
-		self.consts = {}
-		self.assignments = {}
-		self.animations = {}
+		self.enums = OrderedDict()
+		self.consts = OrderedDict()
+		self.assignments = OrderedDict()
+		self.animations = OrderedDict()
 		self.package = get_package(name)
 		self.base_type = None
 		self.children = []
-		self.methods = {}
-		self.signals = set()
+		self.methods = OrderedDict()
+		self.signals = OrderedDict()
 		self.elements = []
 		self.generators = []
 		self.id = None
@@ -69,7 +71,7 @@ class component_generator(object):
 			g.collect_id(id_set)
 
 	def create_component_generator(self, component, suffix = '<anonymous>'):
-		value = component_generator(self.ns, self.package + "." + suffix, component)
+		value = component_generator(self.ns, self, self.package + "." + suffix, component)
 		self.generators.append(value)
 		return value
 
@@ -77,6 +79,7 @@ class component_generator(object):
 		t = type(value)
 		if t is lang.Component:
 			value = self.create_component_generator(value)
+			#print("dep %s:%s.%s -> %s:%s" % (hex(id(self)),self.component.name, target, hex(id(value)),value.component.name))
 		if isinstance(value, (str, basestring)): #and value[0] == '"' and value[-1] == '"':
 			value = str(value.replace("\\\n", "")) #multiline continuation \<NEWLINE>
 		if target in self.assignments:
@@ -100,7 +103,9 @@ class component_generator(object):
 						raise Exception("lazy property must be declared with component as value")
 					if len(child.properties) != 1:
 						raise Exception("property %s is lazy, hence should be declared alone" %name)
-					self.lazy_properties[name] = self.create_component_generator(default_value, '<lazy:%s>' %name)
+					value = self.create_component_generator(default_value, '<lazy:%s>' %name)
+					#print("dep %s:%s.%s -> %s:%s" % (hex(id(self)),self.component.name, name, hex(id(value)),value.component.name))
+					self.lazy_properties[name] = value
 
 				if child.const:
 					if len(child.properties) != 1:
@@ -128,12 +133,14 @@ class component_generator(object):
 			self.assign("id", child.name)
 		elif t is lang.Component:
 			value = self.create_component_generator(child)
+			#print("dep %s:%s.<anonymous> -> %s:%s" % (hex(id(self)), self.component.name, hex(id(value)),value.component.name))
 			self.children.append(value)
 		elif t is lang.Behavior:
 			for target in child.target:
 				if target in self.animations:
 					raise Exception("duplicate animation on property " + target)
 				value = self.create_component_generator(child.animation, "<anonymous-animation>")
+				#print("dep %s:%s.%s -> %s:%s" % (hex(id(self)), self.component.name, target, hex(id(value)),value.component.name))
 				self.animations[target] = value
 		elif t is lang.Method:
 			for name in child.name:
@@ -156,7 +163,7 @@ class component_generator(object):
 			name = child.name
 			if name in self.signals:
 				raise Exception("duplicate signal " + name)
-			self.signals.add(name)
+			self.signals[name] = None
 		elif t is lang.ListElement:
 			self.elements.append(child.data)
 		elif t is lang.AssignmentScope:
@@ -233,10 +240,10 @@ class component_generator(object):
 			gen.pregenerate(registry)
 
 		methods = self.methods
-		self.methods = {}
-		self.changed_handlers = {}
-		self.signal_handlers = {}
-		self.key_handlers = {}
+		self.methods = OrderedDict()
+		self.changed_handlers = OrderedDict()
+		self.signal_handlers = OrderedDict()
+		self.key_handlers = OrderedDict()
 		#print 'pregenerate', self.name
 		base_type = self.get_base_type(registry, register_used = False)
 		base_gen = registry.components[base_type] if base_type != 'core.CoreObject' else None
@@ -294,7 +301,7 @@ class component_generator(object):
 		return "%score.addConstProperty(%s, '%s', function() %s)" %(ident, proto, name, code)
 
 	def transform_handlers(self, registry, blocks):
-		result = {}
+		result = OrderedDict()
 		for (path, name), (args, code, async_) in blocks.items():
 			if name == '__complete':
 				code = code.strip()
@@ -318,7 +325,7 @@ class component_generator(object):
 
 		r.append("%s%s.componentName = '%s'" %(ident, self.proto_name, self.name))
 
-		for name in self.signals:
+		for name in self.signals.keys():
 			r.append("%s%s.%s = $core.createSignal('%s')" %(ident, self.proto_name, name, name))
 
 		for prop in self.properties:
@@ -479,7 +486,7 @@ class component_generator(object):
 		ident = "\t" * ident_n
 
 		if not self.prototype:
-			for name in self.signals:
+			for name in self.signals.keys():
 				r.append("%s%s.%s = $core.createSignal('%s').bind(%s)" %(ident, parent, name, name, parent))
 
 			for prop in self.properties:
@@ -542,7 +549,7 @@ class component_generator(object):
 
 		return "\n".join(r)
 
-	def transform_root(self, registry, parent, property):
+	def transform_root(self, registry, parent, property, lookup_parent=False):
 		if property == 'context':
 			return ("%s._get('%s')" %(parent, property)) if parent else '_context'
 		elif property == 'parent':
@@ -552,6 +559,17 @@ class component_generator(object):
 			if prop:
 				return property
 			else:
+				if lookup_parent:
+					#try to find property in parent generators
+					g = self.parent
+					prefix = "parent."
+					while g:
+						prop = g.find_property(registry, property)
+						if prop:
+							return prefix + property
+						prefix += "parent."
+						g = g.parent
+				
 				#replace first id (not a property with parent object reference)
 				return ("%s._get('%s')" %(parent, property)) if parent else ("_get('%s')" %property)
 

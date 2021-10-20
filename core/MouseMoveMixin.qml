@@ -10,7 +10,6 @@ BaseMouseMixin {
 
 	///@private
 	constructor: {
-		this.element = this.parent.element;
 		this._bindMove(this.enabled)
 	}
 
@@ -38,8 +37,8 @@ BaseMouseMixin {
 		if (value && !this._mouseMoveBinder) {
 			this._mouseMoveBinder = new $core.EventBinder(this.element)
 			this._mouseMoveBinder.on('mousemove', function(event) {
-				if (!this._updatePosition(event) && ('preventDefault' in event))
-					event.preventDefault()
+				if (!this._updatePosition(event))
+					$core.callMethod(event, 'preventDefault')
 			}.bind(this))
 		}
 		if (this._mouseMoveBinder)

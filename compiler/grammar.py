@@ -50,7 +50,7 @@ def handle_component_declaration(s, l, t):
 		type = type[idx + 1:]
 	if type[0].islower():
 		raise ParseException(s, l, 'lowercase component name')
-	return component(lang.Component(t[0], t[1]))
+	return component(lang.Component(t[0], t[1].asList()))
 
 def handle_assignment(s, l, t):
 	return component(lang.Assignment(t[0], t[1]))
@@ -66,7 +66,7 @@ def handle_alias_property_declaration(s, l, t):
 	return component(lang.AliasProperty(t[0], t[1]))
 
 def handle_enum_property_declaration(s, l, t):
-	return component(lang.EnumProperty(t[0], t[1], t[2] if len(t) > 2 else None))
+	return component(lang.EnumProperty(t[0], t[1].asList(), t[2] if len(t) > 2 else None))
 
 def handle_method_declaration(s, l, t):
 	async_method = t[0] == 'async'
@@ -78,10 +78,10 @@ def handle_method_declaration(s, l, t):
 	else:
 		names, args, code = t[1], t[2], t[3]
 
-	return component(lang.Method(names, args, code, event_handler, async_method))
+	return component(lang.Method(names.asList(), args.asList(), code, event_handler, async_method))
 
 def handle_assignment_scope(s, l, t):
-	return component(lang.AssignmentScope(t[0], t[1]))
+	return component(lang.AssignmentScope(t[0], t[1].asList()))
 
 def handle_nested_identifier_rvalue(s, l, t):
 	return lang.handle_property_path(t[0])
@@ -93,7 +93,7 @@ def handle_id_declaration(s, l, t):
 	return component(lang.IdAssignment(t[0]))
 
 def handle_behavior_declaration(s, l, t):
-	return component(lang.Behavior(t[0], t[1]))
+	return component(lang.Behavior(t[0].asList(), t[1]))
 
 def handle_signal_declaration(s, l, t):
 	return component(lang.Signal(t[0]))
@@ -156,7 +156,10 @@ identifier = Word(srange("[a-z_]"), alphanums + "_")
 null_value = Keyword("null")
 bool_value = Keyword("true") | Keyword("false")
 bool_value.setParseAction(handle_bool_value)
-number = Combine(Optional('0x') + Word("01234567890+-."))
+real_number = Regex(r"\d+\.\d+(e[+-]?\d+)?", re.I)
+hex_number = Regex(r"0x[\da-f]", re.I)
+int_number = Regex(r"\d+")
+number = real_number | hex_number | int_number
 number.setParseAction(handle_number)
 
 def handle_string(s, l, t):
@@ -255,14 +258,11 @@ id_declaration = Keyword("id").suppress() - Suppress(":") - identifier - express
 id_declaration.setParseAction(handle_id_declaration)
 
 
-assign_declaration = nested_identifier_lvalue + Suppress(":") + expression + expression_end
+assign_declaration = nested_identifier_lvalue + Suppress(":") + ((expression + expression_end) | component_declaration)
 assign_declaration.setParseAction(handle_assignment)
 
 index_declaration = nested_identifier_rvalue + Suppress('[') + expression + Suppress(']')
 index_declaration.setParseAction(handle_index_declaration)
-
-assign_component_declaration = nested_identifier_lvalue + Suppress(":") + component_declaration
-assign_component_declaration.setParseAction(handle_assignment)
 
 const_property_declaration = Keyword("property").suppress() + Keyword("const") - Group(Group(identifier - Suppress(":") - code))
 const_property_declaration.setParseAction(handle_property_declaration)
@@ -287,7 +287,7 @@ assign_scope_declaration.setParseAction(handle_assignment)
 assign_scope = nested_identifier_lvalue + Suppress("{") + Group(OneOrMore(assign_scope_declaration)) + Suppress("}")
 assign_scope.setParseAction(handle_assignment_scope)
 
-method_declaration = Optional(Keyword("async")) + Group(delimitedList(nested_identifier_lvalue, ',')) + Group(Optional(Suppress("(") + delimitedList(identifier, ",") + Suppress(")") )) + Suppress(":") + code
+method_declaration = Optional(Keyword("async")) + Group(delimitedList(nested_identifier_lvalue, ',')) + Group(Optional(Suppress("(") + delimitedList(identifier, ",") + Suppress(")") )) + Suppress(":") - code
 method_declaration.setParseAction(handle_method_declaration)
 
 method_declaration_qml = Optional(Keyword("async")) + Keyword("function") - Group(nested_identifier_lvalue) - Group(Suppress("(") - Optional(delimitedList(identifier, ",")) - Suppress(")") ) - code
@@ -301,7 +301,7 @@ list_element_declaration.setParseAction(handle_list_element)
 
 import_statement = Keyword("import") - restOfLine
 
-scope_declaration = list_element_declaration | behavior_declaration | signal_declaration | alias_property_declaration | enum_property_declaration | const_property_declaration | property_declaration | id_declaration | assign_declaration | assign_component_declaration | component_declaration | method_declaration | method_declaration_qml | assign_scope | static_const_declaration
+scope_declaration = list_element_declaration | behavior_declaration | signal_declaration | alias_property_declaration | enum_property_declaration | const_property_declaration | property_declaration | id_declaration | assign_declaration | component_declaration | method_declaration | method_declaration_qml | assign_scope | static_const_declaration
 component_scope = (Suppress("{") + Group(ZeroOrMore(scope_declaration)) + Suppress("}"))
 
 component_declaration << (component_type + component_scope)
@@ -367,7 +367,7 @@ source.parseWithTabs()
 def parse(data):
 	global doc_root_component
 	doc_root_component = None
-	tree = source.parseString(data, parseAll = True)
+	tree = source.parseString(data, parseAll = True).asList()
 	if len(tree) > 0:
 		tree[0].doc = doc_root_component
 	return tree

@@ -23,7 +23,6 @@ if PY2:
     sys.setdefaultencoding('utf8')
 
 from os import path
-from io import StringIO
 from distutils import dir_util
 from compiler.ts import Ts
 
@@ -43,6 +42,9 @@ parser.add_argument('--jobs', '-j', help='run N jobs in parallel', default=1, na
 parser.add_argument('--set-property', '-s', dest='properties', action='append', help = 'sets manifest property name value', nargs=2)
 parser.add_argument('--print-property', '-P', help = 'get manifest property', nargs=1)
 parser.add_argument('--manifest', default = '.manifest', help = 'app manifest path')
+parser.add_argument('--inline-manifest', default = None, help = 'manifest given in the option value')
+parser.add_argument('--cache-dir', default = '.cache', help = 'cache directory')
+parser.add_argument('--build-dir', default = 'build.{{platform}}', help = 'build output directory')
 parser.add_argument('targets', nargs='*', help='targets to build')
 args = parser.parse_args()
 
@@ -218,12 +220,17 @@ def copytree(src, dst, symlinks=False, ignore=None):
 def listdirs(path):
 	return list(filter(os.path.isdir, [os.path.join(path, x) for x in os.listdir(path)]))
 
+def replace_vars_in_path(path, vars):
+	for k,v in vars.items():
+		path = path.replace("{{%s}}" % k, v)
+	return path
+		
 def build(root, platform, apps, app, manifest):
 	print("building %s for %s..." %(app, platform), file=sys.stderr)
 	if len(apps) > 1:
-		target = path.join('build.' + platform, app)
+		target = path.join(replace_vars_in_path(args.build_dir, {"platform": platform}), app)
 	else:
-		target = 'build.' + platform
+		target = path.join(replace_vars_in_path(args.build_dir, {"platform": platform}))
 
 	try:
 		os.makedirs(target)
@@ -326,6 +333,7 @@ def build(root, platform, apps, app, manifest):
 		kw['verbose'] = True
 
 	kw['platforms'] = set(platforms)
+	kw['cache_dir'] = args.cache_dir
 
 	compile_qml(target, root, project_dirs, manifest, app, **kw)
 
@@ -382,9 +390,12 @@ def build(root, platform, apps, app, manifest):
 
 
 try:
-	with open(args.manifest) as f:
-		manifest = mf.load(f)
-		manifest_path = '.manifest'
+	if not args.inline_manifest:
+		with open(args.manifest) as f:
+			manifest = mf.load(f)
+			manifest_path = '.manifest'
+	else:
+		manifest = mf.loads(args.inline_manifest)
 except IOError:
 	print('warning: could not find .manifest, using empty fallback', file=sys.stderr)
 	manifest = mf.Manifest()
@@ -393,7 +404,7 @@ if args.properties:
 	for name, value in args.properties:
 		manifest.set_property(name, value)
 
-apps = []
+apps = manifest.apps
 def proc_source_dir(source_dir):
 	for f in os.listdir(source_dir):
 		if f[0].islower() and f.endswith('.qml'):
@@ -410,14 +421,13 @@ def proc_source_dir(source_dir):
 			ts.save()
 		sys.exit(0)
 
-
 source_dir = manifest.source_dir
-if isinstance(source_dir, list):
-	for src in source_dir:
-		proc_source_dir(src)
-else:
-	proc_source_dir(source_dir)
-
+if not len(apps):
+	if isinstance(source_dir, list):
+		for src in source_dir:
+			proc_source_dir(src)
+	else:
+		proc_source_dir(source_dir)
 
 platforms = manifest.platforms
 if not platforms:

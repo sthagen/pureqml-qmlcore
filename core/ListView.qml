@@ -28,7 +28,6 @@ BaseView {
 		}
 	}
 
-	///@private
 	function positionViewAtIndex(idx) {
 		if (this.trace)
 			log('positionViewAtIndex ' + idx)
@@ -42,6 +41,13 @@ BaseView {
 		} else {
 			this.positionViewAtItemVertically(itemBox, center, true)
 		}
+	}
+
+	function positionViewAtEnd() {
+		if (this.orientation === this.Horizontal)
+			this.positionViewAtEndHorizontally()
+		else
+			this.positionViewAtEndVertically()
 	}
 
 	///@private
@@ -158,7 +164,7 @@ BaseView {
 
 	///@private
 	function _layout(noPrerender) {
-		var model = this._attached
+		var model = this._modelAttached
 		if (!model) {
 			this.layoutFinished()
 			return
@@ -171,6 +177,7 @@ BaseView {
 			return
 		}
 
+		var visibilityProperty = this.visibilityProperty
 		var horizontal = this.orientation === this.Horizontal
 
 		var padding = this._padding
@@ -191,6 +198,12 @@ BaseView {
 		var prerender = noPrerender? 0: this.prerender * size
 		var leftMargin = -prerender
 		var rightMargin = size + prerender
+
+		if (sizes.length > items.length) {
+			///fixme: override model update api to make sizes stable
+			sizes.splice(items.length, sizes.length - items.length)
+		}
+
 		if (this._scrollDelta != 0) {
 			if (this.nativeScrolling) {
 				if (horizontal)
@@ -204,35 +217,44 @@ BaseView {
 		if (this.trace)
 			log("layout " + n + " into " + w + "x" + h + " @ " + this.content.x + "," + this.content.y + ", prerender: " + prerender + ", range: " + leftMargin + ":" + rightMargin)
 
-		var getItemSize = horizontal?
-			function(item) { return item.width }:
-			function(item) { return item.height }
-
-		var itemsCount = 0
 		var refSize
-		for(var i = 0; i < n && (refSize === undefined || p + c < rightMargin); ++i, ++itemsCount) {
+		for(var i = 0; i < n; ++i) {
 			var item = items[i]
 			var viewPos = p + c
+			var s
 
-			var s = sizes[i] || refSize
-			if (refSize === undefined && s !== undefined)
-				refSize = s
+			if (item) {
+				s = refSize = sizes[i] = (horizontal? item.width: item.height)
+			} else {
+				s = sizes[i]
+				if (s !== undefined) {
+					if (refSize === undefined)
+						refSize = s
+				} else
+					s = refSize
+			}
 
-			var renderable = (viewPos + (s !== undefined? s: 0) >= leftMargin && viewPos < rightMargin) || currentIndex === i
+			var renderable = viewPos + (s !== undefined? s: 0) >= leftMargin && viewPos < rightMargin
 
-			if (!item) {
-				//we can render, or no sizes available
-				if (renderable || s === undefined) {
-					item = this._createDelegate(i)
+			var visibleInModel = true
+			if (visibilityProperty) {
+				visibleInModel = model.getProperty(i, visibilityProperty)
+				if (!visibleInModel) {
+					renderable = false
+					s = sizes[i] = 0
+				}
+			}
+
+			if (!item && visibleInModel && (renderable || s === undefined)) {
+				item = this._createDelegate(i)
+				if (item) {
+					s = refSize = sizes[i] = (horizontal? item.width: item.height)
 					created = true
 				}
 			}
 
-			if (item)
-				s = refSize = sizes[i] = getItemSize(item)
-
 			if (item) {
-				var visible = (viewPos + s >= 0 && viewPos < size) //checking real delegate visibility, without prerender margin
+				var visible = visibleInModel && (viewPos + s >= 0 && viewPos < size) //checking real delegate visibility, without prerender margin
 
 				if (item.x + item.width > maxW)
 					maxW = item.width + item.x
@@ -251,14 +273,16 @@ BaseView {
 				item.visibleInView = visible
 
 				if (!renderable && discardDelegates) {
-					if (this.trace)
-						log('discarding delegate', i)
-					this._discardItem(item)
-					items[i] = null
-					created = true
+					if (items[i]) {
+						if (this.trace)
+							log('discarding delegate', i)
+						this._discardItem(item)
+						items[i] = null
+						created = true
+					}
 				}
 			} else {
-				var nextP = p + refSize
+				var nextP = p + s
 				if (horizontal) {
 					if (nextP > maxW)
 						maxW = nextP
@@ -270,27 +294,8 @@ BaseView {
 
 			p += s + this.spacing
 		}
-		for( ;i < n; ++i) {
-			var item = items[i]
-			if (item) {
-				item.visibleInView = false
-				if (discardDelegates) {
-					this._discardItem(item)
-					items[i] = null
-					created = true
-				}
-			}
-		}
 		if (p > startPos)
 			p -= this.spacing;
-
-		if (sizes.length > items.length) {
-			///fixme: override model update api to make sizes stable
-			sizes = sizes.slice(0, items.length)
-		}
-
-		if (itemsCount)
-			p *= items.length / itemsCount
 
 		if (this.trace)
 			log('result: ' + p + ', max: ' + maxW + 'x' + maxH)
@@ -305,6 +310,9 @@ BaseView {
 			this.contentWidth = maxW
 			this.contentHeight = p
 		}
+		if (this.positionMode == this.End && !this._skipPositioning) {
+			this.positionViewAtEnd()
+		}
 		this.layoutFinished()
 		if (created)
 			this._context.scheduleComplete()
@@ -313,6 +321,8 @@ BaseView {
 	/// @private creates delegate in given item slot
 	function _createDelegate(idx) {
 		var item = $core.BaseView.prototype._createDelegate.apply(this, arguments)
+		if (!item)
+			return item
 		//connect both dimensions, because we calculate maxWidth/maxHeight in contentWidth/contentHeight
 		var update = function(horizontal) {
 			this._scheduleLayout()

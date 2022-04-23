@@ -152,12 +152,18 @@ class generator(object):
 
 			if queue:
 				name = queue.pop(0)
+				if name not in self.components:
+					raise Exception("Component '%s' is marked as used, but no declaration found. Maybe you have @using declaration with wrong component name." %name)
 				component = self.components[name]
 				base_type = self.find_component(component.package, component.component.name)
 				base_class[name] = base_type
 
 				if name not in code:
-					code[name] = self.generate_component(component)
+					try:
+						code[name] = self.generate_component(component)
+					except Exception as ex:
+						ex.filename = name
+						raise
 
 		r = ''
 		order = []

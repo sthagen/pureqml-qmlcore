@@ -7,6 +7,17 @@ import re
 import os
 import os.path
 
+class Value(object):
+	def __init__(self, object):
+		self.name = None
+		self.ref = None
+		self.defaultValue = None
+		self.target = object
+
+	@property
+	def doc(self):
+		return self.target.doc
+
 class Component(object):
 	def __init__(self, package, name, component):
 		self.package = package
@@ -15,7 +26,7 @@ class Component(object):
 
 
 	def generate_section(self, values):
-		if not hasattr(values[-1], "name"):
+		if not values[-1].name:
 			return
 
 		r = {}
@@ -24,7 +35,7 @@ class Component(object):
 			docText = value.doc.text if value.doc is not None else ""
 			docLines = docText.splitlines()
 
-			category = value.__class__.__name__
+			category = value.target.__class__.__name__
 
 			forceInternal = category == 'Method' and (re.match("^on.*Changed$", value.name[0]) or \
 													  value.name[0] == "onCompleted" or \
@@ -33,8 +44,8 @@ class Component(object):
 			internal = bool(forceInternal) or ((value.doc is not None) and ("@private" in value.doc.text or "@internal" in value.doc.text))
 
 			if category == 'Property':
-				p = { "text": docText, "internal": internal, "type": value.type, "defaultValue": value.defaultValue }
-				if hasattr(value, 'ref'):
+				p = { "text": docText, "internal": internal, "type": value.target.type, "defaultValue": value.defaultValue }
+				if value.ref:
 					p['ref'] = value.ref
 				r[value.name] = p
 			elif category == 'Method' and docText:
@@ -73,24 +84,29 @@ class Component(object):
 			if (category == "Assignment"):
 				continue
 			values = children.setdefault(category, [])
+			doc = Value(child)
 			if (category == "Property"):
-				child.name = child.properties[0][0]
+				doc.name = child.properties[0][0]
 				if hasattr(child.properties[0][1], "children"):
 					component_file_name = child.type + ".qml"
 					if component_file_name in component_path_map:
 						component_dir = component_path_map[component_file_name][2:]
+						if component_dir.startswith("qmlcore/"):
+							component_dir = component_dir[8:]
 						component_dir = component_dir.replace("/", ".")
-						child.ref = component_dir + "/" + component_file_name[:-4]
-					child.defaultValue = child.properties[0][1].name
+						doc.ref = component_dir + "/" + component_file_name[:-4]
+					doc.defaultValue = child.properties[0][1].name
 				else:
-					child.defaultValue = child.properties[0][1][1:-1] if child.properties[0][1] is not None else ""
-					if child.defaultValue is not None and len(child.defaultValue) > 1:
-						if child.defaultValue[0] == '"':
-							child.defaultValue = child.defaultValue[1:]
-						if child.defaultValue[-1] == '"':
-							child.defaultValue = child.defaultValue[:-1]
+					doc.defaultValue = child.properties[0][1][1:-1] if child.properties[0][1] is not None else ""
+					if doc.defaultValue is not None and len(doc.defaultValue) > 1:
+						if doc.defaultValue[0] == '"':
+							doc.defaultValue = doc.defaultValue[1:]
+						if doc.defaultValue[-1] == '"':
+							doc.defaultValue = doc.defaultValue[:-1]
+			if hasattr(child, 'name'):
+				doc.name = child.name
 
-			values.append(child)
+			values.append(doc)
 
 		data = []
 		if 'Property' in children:
@@ -108,9 +124,8 @@ class Component(object):
 		if len(data) == 0:
 			return r
 
-		lastName = data[-1][0]
-		for d in data:
-			r[d[1]] = self.generate_section(children[d[0]])
+		for category, name in data:
+			r[name] = self.generate_section(children[category])
 
 		return r
 

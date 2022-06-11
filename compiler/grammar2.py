@@ -317,12 +317,13 @@ infix_parser = PrattParser([
 	LeftParenthesis(19),
 	LeftSquareBracket(19),
 
+	Operator('new', None, 18),
+
 	UnsupportedOperator('++', 17, 16),
 	UnsupportedOperator('--', 17, 16),
 	UnsupportedOperator('void', None, 16),
 	UnsupportedOperator('delete', None, 16),
 	UnsupportedOperator('await', None, 16),
-	Operator('typeof', None, 16),
 
 	Operator('!', None, 16),
 	Operator('~', None, 16),

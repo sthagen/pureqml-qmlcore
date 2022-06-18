@@ -2,7 +2,7 @@ from builtins import filter, object, range, str
 from past.builtins import basestring
 from collections import OrderedDict
 
-from compiler.js import get_package, split_name, escape, mangle_package
+from compiler.js import get_package, split_name, escape, mangle_package, Error
 from compiler.js.code import process, parse_deps, generate_accessors, replace_enums, path_or_parent, mangle_path
 from compiler import lang
 import json
@@ -64,6 +64,10 @@ class component_generator(object):
 	def base_proto_name(self):
 		return self.class_name + 'BasePrototype'
 
+	@property
+	def loc(self):
+		return self.component.loc
+
 	def collect_id(self, id_set):
 		if self.id is not None:
 			id_set.add(self.id)
@@ -75,7 +79,7 @@ class component_generator(object):
 		self.generators.append(value)
 		return value
 
-	def assign(self, target, value):
+	def assign(self, target, value, loc):
 		t = type(value)
 		if t is lang.Component:
 			value = self.create_component_generator(value)
@@ -83,7 +87,7 @@ class component_generator(object):
 		if isinstance(value, (str, basestring)): #and value[0] == '"' and value[-1] == '"':
 			value = str(value.replace("\\\n", "")) #multiline continuation \<NEWLINE>
 		if target in self.assignments:
-			raise Exception("double assignment to '%s' in %s of type %s" %(target, self.name, self.component.name))
+			raise Error("double assignment to '%s' in %s of type %s" %(target, self.name, self.component.name), loc)
 		self.assignments[target] = value
 
 	def has_property(self, name):
@@ -95,42 +99,42 @@ class component_generator(object):
 			self.properties.append(child)
 			for name, default_value in child.properties:
 				if self.has_property(name):
-					raise Exception("duplicate property %s.%s" %(self.name, name))
+					raise Error("duplicate property %s.%s" %(self.name, name), child.loc)
 
 				#print self.name, name, default_value, lang.value_is_trivial(default_value)
 				if child.lazy:
 					if not isinstance(default_value, lang.Component):
-						raise Exception("lazy property must be declared with component as value")
+						raise Error("lazy property must be declared with component as value", child.loc)
 					if len(child.properties) != 1:
-						raise Exception("property %s is lazy, hence should be declared alone" %name)
+						raise Error("property %s is lazy, hence should be declared alone" %name, child.loc)
 					value = self.create_component_generator(default_value, '<lazy:%s>' %name)
 					#print("dep %s:%s.%s -> %s:%s" % (hex(id(self)),self.component.name, name, hex(id(value)),value.component.name))
 					self.lazy_properties[name] = value
 
 				if child.const:
 					if len(child.properties) != 1:
-						raise Exception("property %s is const, hence should be declared alone" %name)
+						raise Error("property %s is const, hence should be declared alone" %name, child.loc)
 					self.const_properties[name] = default_value #string code
 
 				self.declared_properties[name] = child
 				if default_value is not None and not child.const:
 					if not child.lazy and not lang.value_is_trivial(default_value):
-						self.assign(name, default_value)
+						self.assign(name, default_value, child.loc)
 		elif t is lang.AliasProperty:
 			if self.has_property(child.name):
-				raise Exception("duplicate property " + child.name)
+				raise Error("duplicate property " + child.name, child.loc)
 			self.aliases[child.name] = child.target
 		elif t is lang.EnumProperty:
 			if self.has_property(child.name):
-				raise Exception("duplicate property " + child.name)
+				raise Error("duplicate property " + child.name, child.loc)
 			self.enums[child.name] = child
 		elif t is lang.Assignment:
 			if child.target == 'id':
-				raise Exception('assigning non-id for id')
-			self.assign(child.target, child.value)
+				raise Error('assigning non-id for id', child.loc)
+			self.assign(child.target, child.value, child.loc)
 		elif t is lang.IdAssignment:
 			self.id = child.name
-			self.assign("id", child.name)
+			self.assign("id", child.name, child.loc)
 		elif t is lang.Component:
 			value = self.create_component_generator(child)
 			#print("dep %s:%s.<anonymous> -> %s:%s" % (hex(id(self)), self.component.name, hex(id(value)),value.component.name))
@@ -138,7 +142,7 @@ class component_generator(object):
 		elif t is lang.Behavior:
 			for target in child.target:
 				if target in self.animations:
-					raise Exception("duplicate animation on property " + target)
+					raise Error("duplicate animation on property " + target, child.loc)
 				value = self.create_component_generator(child.animation, "<anonymous-animation>")
 				#print("dep %s:%s.%s -> %s:%s" % (hex(id(self)), self.component.name, target, hex(id(value)),value.component.name))
 				self.animations[target] = value
@@ -146,35 +150,35 @@ class component_generator(object):
 			for name in child.name:
 				if name == 'constructor':
 					if self.ctor != '':
-						raise Exception("duplicate constructor")
+						raise Error("duplicate constructor", child.loc)
 					self.ctor = "\t//custom constructor:\n\t" + child.code + "\n"
 				elif name == 'prototypeConstructor':
 					if not self.prototype:
-						raise Exception('prototypeConstructor can be used only in prototypes')
+						raise Error('prototypeConstructor can be used only in prototypes', child.loc)
 					if self.prototype_ctor != '':
-						raise Exception("duplicate constructor")
+						raise Error("duplicate constructor", child.loc)
 					self.prototype_ctor = child.code
 				else:
 					fullname, args, code = split_name(name), child.args, child.code
 					if fullname in self.methods:
-						raise Exception("duplicate method " + name)
+						raise Error("duplicate method " + name, child.loc)
 					self.methods[fullname] = args, code, child.event, child.async_ #fixme: fix code duplication here
 		elif t is lang.Signal:
 			name = child.name
 			if name in self.signals:
-				raise Exception("duplicate signal " + name)
+				raise Error("duplicate signal " + name, child.loc)
 			self.signals[name] = None
 		elif t is lang.ListElement:
 			self.elements.append(child.data)
 		elif t is lang.AssignmentScope:
 			for assign in child.values:
-				self.assign(child.target + '.' + assign.target, assign.value)
+				self.assign(child.target + '.' + assign.target, assign.value, child.loc)
 		elif t is lang.Const:
 			if child.name in self.consts:
-				raise Exception("duplicate static property " + child.name)
+				raise Error("duplicate static property " + child.name, child.loc)
 			self.consts[child.name] = child
 		else:
-			raise Exception("unhandled element: %s" %child)
+			raise Error("unhandled element: %s" %child, child.loc)
 
 	def call_create(self, registry, ident_n, target, value, closure):
 		assert isinstance(value, component_generator)
@@ -198,6 +202,7 @@ class component_generator(object):
 		return code
 
 	def get_base_type(self, registry, *args, **kw):
+		kw['loc'] = self.loc
 		return registry.find_component(self.package, self.component.name, *args, **kw)
 
 	def generate(self, registry):
@@ -271,21 +276,21 @@ class component_generator(object):
 					name = name[0].upper() + name[1:-7]
 					fullname = path, name
 					if fullname in self.key_handlers:
-						raise Exception("duplicate key handler " + oname)
+						raise Error("duplicate key handler " + oname, self.loc)
 					self.key_handlers[fullname] = ('key', 'event'), code, False
 				elif is_changed:
 					name = name[:-7]
 					fullname = path, name
 					if fullname in self.changed_handlers:
-						raise Exception("duplicate signal handler " + oname)
+						raise Error("duplicate signal handler " + oname, self.loc)
 					self.changed_handlers[fullname] = ('value', ), code, False
 				else:
 					if fullname in self.signal_handlers:
-						raise Exception("duplicate signal handler " + oname)
+						raise Error("duplicate signal handler " + oname, self.loc)
 					self.signal_handlers[fullname] = args, code, False
 			else:
 				if fullname in self.methods:
-					raise Exception("duplicate method " + oname)
+					raise Error("duplicate method " + oname, self.loc)
 				if name == 'onCompleted':
 					fullname = path, '__complete'
 				self.methods[fullname] = args, code, async_
@@ -340,7 +345,7 @@ class component_generator(object):
 					if lang.value_is_trivial(default_value):
 						default_value, deps = parse_deps('@error', default_value, partial(self.transform_root, registry, None))
 						if deps:
-							raise Exception('trivial value emits dependencies %s (default: %s)' %(deps, default_value))
+							raise Error('trivial value emits dependencies %s (default: %s)' %(deps, default_value), self.loc)
 						args.append(default_value)
 					r.append("%score.addProperty(%s)" %(ident, ", ".join(args)))
 
@@ -381,7 +386,7 @@ class component_generator(object):
 
 			for path, name in methods:
 				if path:
-					raise Exception('no <id> qualifiers (%s) allowed in prototypes %s (%s)' %(path, name, self.name))
+					raise Error('no <id> qualifiers (%s) allowed in prototypes %s (%s)' %(path, name, self.name), self.loc)
 				code = code.replace('@super.', self.base_proto_name + '.')
 				r.append("%s%s.%s = %s" %(ident, self.proto_name, name, code))
 
@@ -467,10 +472,10 @@ class component_generator(object):
 				return
 
 			if not self.find_property(registry, path[0]):
-				raise Exception('unknown property %s in %s (%s)' %(path[0], self.name, self.component.name))
+				raise Error('unknown property %s in %s (%s)' %(path[0], self.name, self.component.name), self.loc)
 		else: #len(path) == 1
 			if not self.find_property(registry, target):
-				raise Exception('unknown property %s in %s (%s)' %(target, self.name, self.component.name))
+				raise Error('unknown property %s in %s (%s)' %(target, self.name, self.component.name), self.loc)
 
 	def generate_creator_function(self, registry, name, value, ident_n = 1):
 		ident = "\t" * ident_n
@@ -501,14 +506,14 @@ class component_generator(object):
 						if lang.value_is_trivial(default_value):
 							default_value, deps = parse_deps('@error', default_value, partial(self.transform_root, registry, None))
 							if deps:
-								raise Exception('trivial value emits dependencies %s (default: %s)' %(deps, default_value))
+								raise Error('trivial value emits dependencies %s (default: %s)' %(deps, default_value), self.loc)
 							args.append(default_value)
 						r.append("\tcore.addProperty(%s)" %(", ".join(args)))
 
 			for name, prop in self.enums.items():
-				raise Exception('adding enums without prototype is not supported, consider putting this property (%s) in prototype' %name)
+				raise Error('adding enums without prototype is not supported, consider putting this property (%s) in prototype' %name, self.loc)
 			for name, prop in self.consts.items():
-				raise Exception('adding consts without prototype is not unsupported, consider putting this property (%s) in prototype' %name)
+				raise Error('adding consts without prototype is not unsupported, consider putting this property (%s) in prototype' %name, self.loc)
 
 		for idx, gen in enumerate(self.children):
 			var = "%s$child%d" %(escape(parent), idx)
@@ -522,10 +527,10 @@ class component_generator(object):
 		for target, value in self.assignments.items():
 			if target == "id":
 				if "." in value:
-					raise Exception("expected identifier, not expression")
+					raise Error("expected identifier, not expression", self.loc)
 				r.append("%s%s._setId('%s')" %(ident, parent, value))
 			elif target.endswith(".id"):
-				raise Exception("setting id of the remote object is prohibited")
+				raise Error("setting id of the remote object is prohibited", self.loc)
 			else:
 				self.check_target_property(registry, target)
 
@@ -575,7 +580,7 @@ class component_generator(object):
 				if property in registry.id_set:
 					return ("%s._get('%s')" %(parent, property)) if parent else ("_get('%s')" %property)
 				else:
-					raise Exception("Property %s.%s could not be resolved" %(self.name, property))
+					raise Error("Property %s.%s could not be resolved" %(self.name, property), self.loc)
 
 
 	def get_rvalue(self, registry, parent, target):
@@ -634,7 +639,7 @@ class component_generator(object):
 				var = "%s$%s" %(escape(parent), escape(target))
 				r.append(self.call_setup(registry, ident_n, var, value, closure))
 			else:
-				raise Exception("skip assignment %s = %s" %(target, value))
+				raise Error("skip assignment %s = %s" %(target, value), self.loc)
 
 		def put_in_instance(handler):
 			path, name = handler

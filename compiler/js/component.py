@@ -98,6 +98,8 @@ class component_generator(object):
 		if t is lang.Property:
 			self.properties.append(child)
 			for name, default_value in child.properties:
+				if name == 'modelData':
+					raise Error("modelData property is reserved for model row disambiguation and cannot be declared", child.loc)
 				if self.has_property(name):
 					raise Error("duplicate property %s.%s" %(self.name, name), child.loc)
 
@@ -133,6 +135,10 @@ class component_generator(object):
 				raise Error('assigning non-id for id', child.loc)
 			self.assign(child.target, child.value, child.loc)
 		elif t is lang.IdAssignment:
+			if child.name == "modelData":
+				raise Error("modelData property is reserved for model row disambiguation and cannot be an id of the component", child.loc)
+			if child.name == "model":
+				raise Error("id: model breaks model/delegate relationship and overrides current model row", child.loc)
 			self.id = child.name
 			self.assign("id", child.name, child.loc)
 		elif t is lang.Component:
@@ -438,7 +444,7 @@ class component_generator(object):
 			%(ident, self.proto_name, b, code, ident)
 
 		setup_code = self.generate_setup_code(registry, '$this', '$c', ident_n + 2).strip()
-		b = '%s%s.$s.call(this, $c.$b); delete $c.$b' %(ident, self.base_proto_name)
+		b = '%s%s.$s.call($this, $c.$b); delete $c.$b' %(ident, self.base_proto_name)
 		if setup_code:
 			generate = True
 		setup_code = '%s%s.$s = function($c) {\n\t\tvar $this = this;\n%s\n%s\n}' \
@@ -561,6 +567,8 @@ class component_generator(object):
 			return 'parent'
 		elif property == 'this':
 			return 'this'
+		elif property == 'modelData':
+			return "%s_get('_delegate')._local.modelData" %(parent + '.' if parent else '')
 		else:
 			prop = self.find_property(registry, property)
 			if prop:

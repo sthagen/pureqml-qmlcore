@@ -50,12 +50,25 @@ def path_or_parent(path, parent, transform):
 	return mangle_path(path.split('.'), transform) if path else parent
 
 gets_re = re.compile(r'\${(.*?)}')
+func_re = re.compile(r'\$\((.*?)\)')
 tr_re = re.compile(r'\W(qsTr|qsTranslate|tr)\(')
 
-def parse_deps(parent, text, transform):
+class ParseDepsContext:
+	def __init__(self, registry, component):
+		self.registry = registry
+		self.component = component
+
+	def transform(self, path, lookup_parent = False):
+		return self.component.transform_root(self.registry, None, path, lookup_parent=lookup_parent)
+
+	def find_method(self, name):
+		return self.component.find_method(self.registry, name)
+
+
+def parse_deps(parent, text, parse_ctx):
 	deps = OrderedDict()
 
-	for m in tr_re.finditer(text):
+	for _ in tr_re.finditer(text):
 		deps[(parent + '._context', 'language')] = None
 		break
 
@@ -66,7 +79,7 @@ def parse_deps(parent, text, transform):
 
 		#if the path is only a single component, try hierarchical scoping
 		if len(path) == 1 and path[0] != 'model' and path[0] != 'modelData':
-			tpath = mangle_path(path, transform, lookup_parent=True)
+			tpath = mangle_path(path, parse_ctx.transform, lookup_parent=True)
 			tpath_v = tpath.split('.')
 			if target != 'parent':
 				tdep = parent + "." + '.'.join(tpath_v[:-1]) if len(tpath_v)>1 else parent
@@ -81,13 +94,23 @@ def parse_deps(parent, text, transform):
 		else:
 			if len(path) > 1 and path[0] == 'this':
 				return '.'.join([parent] + path[1:])
-			dep_parent = parent + '.' + mangle_path(gets, transform) if gets else parent
+			dep_parent = parent + '.' + mangle_path(gets, parse_ctx.transform) if gets else parent
 			if target != 'parent': #parent property is special - it's not property per se, and is not allowed to change
 				deps[(dep_parent, target)] = None
 
-		return parent + '.' + mangle_path(path, transform)
+		return parent + '.' + mangle_path(path, parse_ctx.transform)
+
+	def func(m):
+		path = m.group(1).split('.')
+		target, path = path[0], path[1:]
+		if target == 'this':
+			target = parent
+		if not path and parse_ctx.find_method(target):
+			return ".".join([parent, target])
+		return ".".join([target] + path)
 
 	text = gets_re.sub(sub, text)
+	text = func_re.sub(func, text)
 	return text, deps.keys()
 
 def generate_accessors(parent, target, transform):

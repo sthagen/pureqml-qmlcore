@@ -16,21 +16,27 @@ def get_enum_prologue(text, generator, registry):
 	return prologue
 
 id_re = re.compile(r'(\w+\s*)(\.\s*\w+\s*)*', re.I | re.M)
-def process(text, generator, registry, args):
-	args = set(args)
+
+def get_ids_candidates(text, registry, args):
 	id_set = registry.id_set
 	used_ids = OrderedDict()
 	for m in id_re.finditer(text):
 		found = m.group(1)
 		if found in id_set and found not in args:
 			used_ids[found] = None
+	return list(used_ids.keys())
+
+def get_ids_prologue(text, registry, args):
+	candidates = get_ids_candidates(text, registry, args)
+	return ["%s = this._get('%s', true)" %(x, x) for x in candidates]
+
+def process(text, generator, registry, args):
+	args = set(args)
 
 	scope_pos = text.index('{') #raise exception, should be 0 actually
 	scope_pos += 1
-	prologue = []
-	if used_ids:
-		prologue += ["%s = this._get('%s', true)" %(x, x) for x in used_ids.keys()]
 
+	prologue = get_ids_prologue(text, registry, args)
 	prologue += get_enum_prologue(text, generator, registry)
 
 	if prologue:
@@ -100,13 +106,24 @@ def parse_deps(parent, text, parse_ctx):
 
 		return parent + '.' + mangle_path(path, parse_ctx.transform)
 
+	possible_ids = get_ids_candidates(text, parse_ctx.registry, set())
+
 	def func(m):
 		path = m.group(1).split('.')
 		target, path = path[0], path[1:]
 		if target == 'this':
 			target = parent
+		elif target == 'parent':
+			return ".".join([parent, "parent"] + path)
+
+		# function does not have any qualifiers and found in current component/prototype.
 		if not path and parse_ctx.find_method(target):
 			return ".".join([parent, target])
+
+		# replace possible id match with _get(id)
+		if target in possible_ids:
+			target = "%s._get('%s')" %(parent, target)
+
 		return ".".join([target] + path)
 
 	text = gets_re.sub(sub, text)

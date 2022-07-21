@@ -18,14 +18,15 @@ Object {
 		this._disconnect()
 
 		var target = this.target
-		if((typeof target) !== 'object' || !(target instanceof $core.CoreObject))
+		if (!target)
+			return
+
+		if (!(target instanceof $core.CoreObject))
 			throw new Error("You can only assign qml objects to target, got: " + target + " of type " + typeof target + " to " + this.getComponentPath())
 
 		//reconnect onTargetChanged
 		this.connectOnChanged(this, 'target', this._scheduleReconnect.bind(this)) //restore target connection
 
-		if (!target)
-			return
 
 		var ons = this._declaredOnConnections
 		for(var i = 0, n = ons.length; i < n; i += 2) {
@@ -44,6 +45,9 @@ Object {
 
 	/// @private
 	function on (name, callback) {
+		if (name === 'target')
+			return
+
 		if (name === '')
 			throw new Error('empty listener name')
 
@@ -55,6 +59,9 @@ Object {
 
 	/// @private
 	function onChanged (name, callback) {
+		if (name === 'target')
+			return
+
 		if (name === '')
 			throw new Error('empty listener name')
 

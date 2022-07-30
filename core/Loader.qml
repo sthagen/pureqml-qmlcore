@@ -9,10 +9,11 @@ Item {
 
 	///@private
 	function discardItem() {
+		this._itemCompleted = false
 		var item = this.item
 		if (item) {
 			item.discard()
-			item = null
+			this.item = null
 		}
 	}
 
@@ -52,6 +53,7 @@ Item {
 		var item
 		if (this.source) {
 			item = this._loadSource()
+			$core.core.createObject(item)
 		} else if (this.sourceComponent) {
 			if (!(this.sourceComponent instanceof $core.Component))
 				throw new Error("sourceComponent assigned to Loader " + this.getComponentPath() + " is not an instance of Component")
@@ -59,35 +61,52 @@ Item {
 				log('loading component ' + this.sourceComponent.getComponentPath())
 			var row = this.parent._get('model', true)
 			item = this.sourceComponent.delegate(this, row? row: {})
+			this._updateVisibilityForChild(item, this.recursiveVisible)
+			this._tryFocus()
 		} else
 			return
 
 		this.item = item
-		var overrideComplete = oldComplete !== $core.CoreObject.prototype.__complete
 
-		if (overrideComplete) {
-			var oldComplete = item.__complete
-			var itemCompleted = this.itemCompleted.bind(this, item)
-			item.__complete = function() {
-				try {
-					oldComplete.call(this)
-				} catch(ex) {
-					log("onComplete failed:", ex)
-				}
-				itemCompleted()
-			}
-		}
-
-		$core.core.createObject(item)
 		this.loaded(item)
 
-		if (!overrideComplete)
-			this.itemCompleted()
+		var hasOnCompleted = item.__complete !== $core.CoreObject.prototype.__complete
+		if (hasOnCompleted) {
+			// Schedule dummy object which calls itemCompleted(item)
+			// It's guaranteed to execute after possibly delayed item.onComplete handler.
+			var complete = function() {
+				//check that item hasn't been changed.
+				if (this.item === item) {
+					this._itemCompleted = true
+					this.itemCompleted(item)
+				}
+			}.bind(this)
+
+			this._context.__onCompleted({
+				__complete: complete
+			})
+		} else {
+			this._itemCompleted = true
+			this.itemCompleted(item)
+		}
 	}
 
 	onRecursiveVisibleChanged: {
 		if (this.item)
 			this._updateVisibilityForChild(this.item, value)
+	}
+
+	/// @private
+	function on (name, callback) {
+		$core.Item.prototype.on.apply(this, arguments)
+		if (name === 'loaded') {
+			if (this.item)
+				callback(this.item)
+		}
+		if (name === 'itemCompleted') {
+			if (this._itemCompleted)
+				callback(this.item)
+		}
 	}
 
 	///@internal

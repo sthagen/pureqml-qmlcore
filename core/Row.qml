@@ -20,9 +20,10 @@ Layout {
 		var p = 0
 		var h = 0
 		this.count = children.length
+
 		for(var i = 0; i < children.length; ++i) {
 			var c = children[i]
-			if (!('height' in c))
+			if (!('width' in c))
 				continue
 
 			var rm = c.anchors.rightMargin || c.anchors.margins
@@ -32,7 +33,7 @@ Layout {
 			if (b > h)
 				h = b
 			c.viewX = p + rm
-			if (c.visible)
+			if (c.visible && c.width > 0)
 				p += c.width + this.spacing + rm + lm
 		}
 		if (p > 0)
